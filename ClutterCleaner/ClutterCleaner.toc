@@ -1,0 +1,6 @@
+## Interface: 60200
+## Title: ClutterCleaner
+## Notes: Removes unnecessary chat clutter.
+## Author: RevelatedDestiny
+## SavedVariables: CCcheckboxes
+ClutterCleaner.lua
