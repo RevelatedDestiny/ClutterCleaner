@@ -1,6 +1,4 @@
--- ClutterCleaner 6.2.4
--- Release date: 14-07-2016
--- Author: RevelatedDestiny
+-- Copyright (C) 2015-2016  RevelatedDestiny
 
 -- ClutterCleaner is an addon for World of Warcraft that allows the player to modify the game in the following ways:
 --   * Removing NPC spam in Warspear/Stormshield from their chat window
@@ -12,17 +10,20 @@
 --   * Offering the option to remove "%s has gone offline" messages if that person is not in their guild or friends list
 --   * Removing NPC spam from their bodyguards while they tag along with them.
 --   * Removing DND/AFK spam when repeatedly whispering someone. After having received such a warning, they won't be displayed again until you haven't whispered that person for over two minutes.
+--   * Fixing bug where offline messages are shown twice.
 
 -- START OF VARIABLE INITIALIZATION --
 
 local f = CreateFrame("Frame") -- Used for addon load check.
-local gracePeriod = 3 -- The grace period for theoretically instantaneous events. If this is too short or too long, the addon may bug.
+local gracePeriod = 1 -- The grace period for theoretically instantaneous events. If this is too short or too long, the addon may bug.
 local monsterSayFilterLocations = {} -- Keeps track of the zones in which to filter out CHAT_MSG_MONSTER_SAY.
 local monsterSayFilterFollowers = {} -- Keeps track of the followers of which to always filter out CHAT_MSG_MONSTER_SAY (i.e. of bodyguards).
 local blizzardSystemFilterStrings = {} -- Keeps track of the strings to filter out in CHAT_MSG_SYSTEM.
 local timeSinceLevelUp = 0 -- Necessary to still allow you to see newly acquired skills upon leveling up, if filterSkillChange is enabled.
 local whisperedPeople = {} -- Keeps track of who you have whispered and when. This allows filtering DND/AFK spam through whisperFilter.
 local timeSinceLastWhisper = 0 -- Keeps track of when you last whispered, necessary for whisperFilter to work.
+local scannedPeopleWow = {} -- Lazy scan of people who have been spotted going online and offline on WoW.
+local scannedPeopleBnet = {} -- Lazy scan of people who have been spotted going online and offline on BNet.
 
 -- END OF VARIABLE INITIALIZATION --
 
@@ -40,6 +41,7 @@ local function initialize(self, event, loadedAddonName, ...)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_SYSTEM", blizzardSystemFilter)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_DND", whisperFilter)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_AFK", whisperFilter)
+		ChatFrame_AddMessageEventFilter("CHAT_MSG_BN_INLINE_TOAST_ALERT", battleNetFilter)
 		fillMonsterSayFilterLocations()
 		fillMonsterSayFilterFollowers()
 		fillBlizzardSystemFilterStrings()
@@ -59,7 +61,8 @@ function checkFirstRuntime()
 		filterSkillChange = true,
 		filterOffline = true,
 		filterBodyguard = true,
-		filterWhisper = true
+		filterWhisper = true,
+		filterDoubleOffline = true
 	}
 end
 
@@ -176,6 +179,18 @@ function createUI()
 	whisperCheckbox:SetChecked(CCcheckboxes.filterWhisper)
 	_G[whisperCheckbox:GetName() .. "Text"]:SetText(" Filter incessant DND/AFK spam in whispers.")
 	_G[whisperCheckbox:GetName() .. "Text"]:SetJustifyH("LEFT")
+	
+	-- Adds a checkbox for fixing the double offline message bug.
+	local doubleOfflineCheckbox = CreateFrame("CheckButton", "doubleOfflineCheckbox", panel, "UICheckButtonTemplate")
+	doubleOfflineCheckbox:SetPoint("TOPLEFT", 20, -380)
+	doubleOfflineCheckbox:SetScript("OnClick", 
+		function()
+			CCcheckboxes.filterDoubleOffline = not CCcheckboxes.filterDoubleOffline
+		end
+	)
+	doubleOfflineCheckbox:SetChecked(CCcheckboxes.filterDoubleOffline)
+	_G[doubleOfflineCheckbox:GetName() .. "Text"]:SetText(" Filter incessant DND/AFK spam in whispers.")
+	_G[doubleOfflineCheckbox:GetName() .. "Text"]:SetJustifyH("LEFT")
 end
 
 -- END OF ADDON INITIALIZATION --
@@ -233,6 +248,21 @@ function whisperFilter(_, _, _, sender)
 	return true
 end
 
+function battleNetFilter(_, _, event, sender)
+	-- Filter in case the message has already been shown.
+	if event == "FRIEND_ONLINE" and scannedPeopleBnet[sender] == 1 
+	   or event == "FRIEND_OFFLINE" and scannedPeopleBnet[sender] == 0 then
+		return CCcheckboxes.filterDoubleOffline
+	else -- Otherwise, scan the person.
+		if event == "FRIEND_ONLINE" then
+			scannedPeopleBnet[sender] = 1
+		else
+			scannedPeopleBnet[sender] = 0
+		end
+	end
+	return false
+end
+
 -- Adds Blizzard's system messages to be filtered to the blizzardSystemFilterStrings
 -- array using a unique identifier wherever possible.
 --  * "No player named": "No player named '%s' is currently playing."
@@ -267,32 +297,33 @@ function fillBlizzardSystemFilterStrings()
 		function()
 			return CCcheckboxes.filterNotInParty and IsInGroup()
 		end
+	blizzardSystemFilterStrings["has come online"] = 
+		function(message)
+			return doubleOfflineFilter(message)
+		end
 	blizzardSystemFilterStrings["has gone offline"] = 
 		function(message)
-			if message == ERR_ARENA_TEAM_NOT_FOUND then
-				return false
-			else
-				local spaceLocation = message:find(" ")
-				local offlinePerson = message:sub(1, spaceLocation-1)
-				return CCcheckboxes.filterOffline and not (checkFriendsList(offlinePerson) or checkGuildList(offlinePerson))
-			end
+			return unnecessaryOfflineMessage(message) or doubleOfflineFilter(message)
 		end
 	blizzardSystemFilterStrings["You have unlearned"] =
 		function()
 			return CCcheckboxes.filterSkillChange
 		end
-	blizzardSystemFilterStrings["You have learned a new ability:"] =
+	blizzardSystemFilterStrings["You have learned a new"] =
 		function()
 			return CCcheckboxes.filterSkillChange and GetTime() - timeSinceLevelUp > gracePeriod
 		end
-	blizzardSystemFilterStrings["You have learned a new passive effect:"] =
-		function()
-				return CCcheckboxes.filterSkillChange and GetTime() - timeSinceLevelUp > gracePeriod
-		end
-	blizzardSystemFilterStrings["You have learned a new spell:"] =
-		function()
-				return CCcheckboxes.filterSkillChange and GetTime() - timeSinceLevelUp > gracePeriod
-		end
+end
+
+-- Checks if the offline message is unneeded clutter.
+function unnecessaryOfflineMessage(message)
+	if message == ERR_ARENA_TEAM_NOT_FOUND then
+			return false
+	else
+		local spaceLocation = message:find(" ")
+		local offlinePerson = message:sub(1, spaceLocation-1)
+		return CCcheckboxes.filterOffline and not (checkFriendsList(offlinePerson) or checkGuildList(offlinePerson))
+	end
 end
 
 -- Checks if offlinePerson is in the user's friends list.
@@ -321,8 +352,26 @@ function checkGuildList(offlinePerson)
 	return false
 end
 
+function doubleOfflineFilter(message)
+	-- Check person's name.
+	local spaceLocation = message:find(" ")
+	local sender = message:sub(1, spaceLocation-1):gsub("[\[]",""):gsub("[\]]","")
+	-- Filter in case the message has already been shown.
+	if message:find("online") and scannedPeopleWow[sender] == 1 
+	   or message:find("offline") and scannedPeopleWow[sender] == 0 then
+		return CCcheckboxes.filterDoubleOffline
+	else -- Otherwise, scan the person.
+		if message:find("online") then
+			scannedPeopleWow[sender] = 1
+		else
+			scannedPeopleWow[sender] = 0
+		end
+	end
+	return false
+end
+
 -- Removes some of Blizzard's system messages, namely those that show up at unwanted times.
-function blizzardSystemFilter(_, _, message)
+function blizzardSystemFilter(var1, var2, message)
 	for key, funcResult in pairs(blizzardSystemFilterStrings) do
 		if message:find(key) then
 			return funcResult(message)

@@ -1,4 +1,4 @@
-## Interface: 60200
+## Interface: 70000
 ## Title: ClutterCleaner
 ## Notes: Removes unnecessary chat clutter.
 ## Author: RevelatedDestiny
