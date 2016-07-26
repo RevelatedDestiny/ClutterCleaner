@@ -355,9 +355,9 @@ end
 function doubleOfflineFilter(message)
 	-- Check person's name.
 	local spaceLocation = message:find(" ")
-	local sender = message:sub(1, spaceLocation-1):gsub("[\[]",""):gsub("[\]]","")
+	local sender = message:sub(1, spaceLocation-1):gsub("[^ ]+[\[](%a*[-]?%a*)[\]][^ ]+","%1")
 	-- Filter in case the message has already been shown.
-	if message:find("online") and scannedPeopleWow[sender] == 1 
+	if message:find("online") and scannedPeopleWow[sender] == 1
 	   or message:find("offline") and scannedPeopleWow[sender] == 0 then
 		return CCcheckboxes.filterDoubleOffline
 	else -- Otherwise, scan the person.
@@ -371,7 +371,7 @@ function doubleOfflineFilter(message)
 end
 
 -- Removes some of Blizzard's system messages, namely those that show up at unwanted times.
-function blizzardSystemFilter(var1, var2, message)
+function blizzardSystemFilter(_, _, message)
 	for key, funcResult in pairs(blizzardSystemFilterStrings) do
 		if message:find(key) then
 			return funcResult(message)
